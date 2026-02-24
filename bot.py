@@ -2,7 +2,7 @@ import requests
 from datetime import datetime
 
 TOKEN = "7982592552:AAHebslaeHfca3dUpyPBX0_TLw_HwwGi5bk"
-CHAT_ID = "1039438785"
+CHAT_ID = "7982592552"
 
 message = """ 📈 Bot Capture A Intraday Stock
 📅 {datetime.now().strftime('%d-%m-%Y')}
