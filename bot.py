@@ -14,8 +14,9 @@ import pytz
 warnings.filterwarnings('ignore')
 
 # ================= TELEGRAM CONFIG =================
-TELEGRAM_TOKEN = os.getenv("7982592552:AAHebslaeHfca3dUpyPBX0_TLw_HwwGi5bk")
-TELEGRAM_CHAT_ID = os.getenv("1039438785")
+# GitHub Secrets se values lo
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise ValueError("❌ TELEGRAM_TOKEN and TELEGRAM_CHAT_ID must be set in environment variables!")
@@ -119,7 +120,8 @@ class NiftyIntradayScreener:
 
             return None
         except Exception as e:
-            # For debugging, you can print error: print(f"Error analyzing {symbol}: {e}")
+            # Optional: print error for debugging
+            # print(f"⚠️ Error analyzing {symbol}: {e}")
             return None
 
     def scan_stocks(self, symbols, workers=10):
@@ -156,7 +158,7 @@ class NiftyIntradayScreener:
             print(f"❌ Telegram error: {e}")
 
     def run(self):
-        # Optional market hours check – uncomment if you want to restrict to market hours
+        # Market hours check optional hai, chahe to hata de
         # if not is_market_open():
         #     print("⏰ Market closed. Exiting.")
         #     return
@@ -164,7 +166,7 @@ class NiftyIntradayScreener:
         print("🚀 Running Intraday Scanner...")
         nifty50, nifty500 = self.get_stock_lists()
 
-        # Scan first 20 from Nifty50 and first 100 from Nifty500
+        # Pehle 20 Nifty50 aur 100 Nifty500 stocks scan karo
         results_50 = self.scan_stocks(nifty50[:20], workers=8)
         results_500 = self.scan_stocks(nifty500[:100], workers=10)
 
@@ -181,65 +183,4 @@ class NiftyIntradayScreener:
 # ================= ENTRY POINT =================
 if __name__ == "__main__":
     screener = NiftyIntradayScreener()
-    screener.run()    # ================= TELEGRAM SEND =================
-    async def send_telegram(self, picks):
-
-        if not picks:
-            message = "❌ No strong intraday setup found."
-            await self.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-            return
-
-        header = f"🚀 TOP INTRADAY PICKS\n📅 {datetime.now(IST).strftime('%d %b %Y %I:%M %p IST')}\n\n"
-        body = ""
-
-        for i, stock in enumerate(picks[:4], 1):
-            body += (
-                f"{i}. {stock['Symbol']}\n"
-                f"Price: ₹{stock['Price']}\n"
-                f"RSI: {stock['RSI']} | Vol: {stock['Volume_Ratio']}x\n"
-                f"Signals: {stock['Reasons']}\n\n"
-            )
-
-        message = header + body + "⚠️ Educational Purpose Only"
-
-        try:
-            await self.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-            print("✅ Telegram message sent")
-        except TelegramError as e:
-            print("❌ Telegram Error:", e)
-
-    # ================= MAIN RUN =================
-    def run(self):
-
-        print("🚀 Running Intraday Scanner...")
-
-        nifty50, nifty500 = self.get_stock_lists()
-
-        results_50 = self.scan_stocks(nifty50[:20], workers=8)
-        results_500 = self.scan_stocks(nifty500[:100], workers=10)
-
-        all_results = results_50 + results_500
-        all_results.sort(key=lambda x: x["Score"], reverse=True)
-
-        asyncio.run(self.send_telegram(all_results))
-
-
-# ================= ENTRY POINT =================
-if __name__ == "__main__":
-
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ TELEGRAM_TOKEN or TELEGRAM_CHAT_ID missing in GitHub Secrets")
-        exit()
-
-    screener = NiftyIntradayScreener()
     screener.run()
-message = "🔥 BEST INTRADAY STOCKS TODAY:\n\n"
-
-for stock, score, price in results[:4]:
-    print(stock, "Score:", score, "Price:", price)
-    message += f"{stock}\nScore: {score}\nPrice: {round(price,2)}\n\n"
-
-# ✅ Telegram Alert Send
-send_telegram_message(message)
-
-print("✅ Telegram Alert Sent")
