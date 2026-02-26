@@ -14,8 +14,8 @@ import pytz
 warnings.filterwarnings('ignore')
 
 # ================= TELEGRAM CONFIG =================
-TELEGRAM_TOKEN = os.getenv("7982592552:AAGC_eq8T1rNMzmRb7J1O7rsgvfH5UUWc3M")
-TELEGRAM_CHAT_ID = os.getenv("1039438785")
+TELEGRAM_TOKEN = os.getenv.get("7982592552:AAGC_eq8T1rNMzmRb7J1O7rsgvfH5UUWc3M")
+TELEGRAM_CHAT_ID = os.getenv.get("1039438785")
 
 IST = pytz.timezone('Asia/Kolkata')
 
