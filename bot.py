@@ -14,26 +14,35 @@ import pytz
 warnings.filterwarnings('ignore')
 
 # ================= TELEGRAM CONFIG =================
-TELEGRAM_TOKEN = os.getenv.get("7982592552:AAGC_eq8T1rNMzmRb7J1O7rsgvfH5UUWc3M")
-TELEGRAM_CHAT_ID = os.getenv.get("1039438785")
+TELEGRAM_TOKEN = os.getenv("7982592552:AAHebslaeHfca3dUpyPBX0_TLw_HwwGi5bk")
+TELEGRAM_CHAT_ID = os.getenv("1039438785")
+
+if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    raise ValueError("❌ TELEGRAM_TOKEN and TELEGRAM_CHAT_ID must be set in environment variables!")
 
 IST = pytz.timezone('Asia/Kolkata')
 
+def is_market_open():
+    """Check if market is open (9:15 AM - 3:30 PM IST, Mon-Fri)"""
+    now = datetime.now(IST)
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return False
+    market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_end = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_start <= now <= market_end
 
 class NiftyIntradayScreener:
     def __init__(self):
         self.bot = Bot(token=TELEGRAM_TOKEN)
 
-    # ================= STOCK LIST =================
     def get_stock_lists(self):
         print("📥 Fetching stock lists...")
         nifty50 = ns.get_nifty50_with_ns()
         nifty500 = ns.get_nifty500_with_ns()
-        print(f"✅ Nifty50: {len(nifty50)}")
-        print(f"✅ Nifty500: {len(nifty500)}")
+        print(f"✅ Nifty50: {len(nifty50)} stocks")
+        print(f"✅ Nifty500: {len(nifty500)} stocks")
         return nifty50, nifty500
 
-    # ================= ANALYSIS =================
     def analyze_stock(self, symbol):
         try:
             end = datetime.now()
@@ -109,26 +118,70 @@ class NiftyIntradayScreener:
                 }
 
             return None
-
-        except:
+        except Exception as e:
+            # For debugging, you can print error: print(f"Error analyzing {symbol}: {e}")
             return None
 
-    # ================= MULTI SCAN =================
     def scan_stocks(self, symbols, workers=10):
         results = []
-
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(self.analyze_stock, sym) for sym in symbols]
-
             for future in as_completed(futures):
                 result = future.result()
                 if result:
                     results.append(result)
-
         results.sort(key=lambda x: x["Score"], reverse=True)
         return results
 
-    # ================= TELEGRAM SEND =================
+    async def send_telegram(self, picks):
+        if not picks:
+            message = "🤖 **Intraday Scan**\n\n❌ No strong setups found today."
+        else:
+            header = f"🚀 **TOP {len(picks[:4])} INTRADAY PICKS**\n"
+            header += f"📅 {datetime.now(IST).strftime('%d %b %Y, %I:%M %p IST')}\n\n"
+            body = ""
+            for i, stock in enumerate(picks[:4], 1):
+                body += (
+                    f"**{i}. {stock['Symbol']}**\n"
+                    f"💰 Price: ₹{stock['Price']}\n"
+                    f"📊 RSI: {stock['RSI']} | Volume: {stock['Volume_Ratio']}x\n"
+                    f"🎯 Signals: {stock['Reasons']}\n\n"
+                )
+            message = header + body + "⚠️ *Educational purpose only*"
+
+        try:
+            await self.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='Markdown')
+            print("✅ Telegram message sent")
+        except TelegramError as e:
+            print(f"❌ Telegram error: {e}")
+
+    def run(self):
+        # Optional market hours check – uncomment if you want to restrict to market hours
+        # if not is_market_open():
+        #     print("⏰ Market closed. Exiting.")
+        #     return
+
+        print("🚀 Running Intraday Scanner...")
+        nifty50, nifty500 = self.get_stock_lists()
+
+        # Scan first 20 from Nifty50 and first 100 from Nifty500
+        results_50 = self.scan_stocks(nifty50[:20], workers=8)
+        results_500 = self.scan_stocks(nifty500[:100], workers=10)
+
+        all_results = results_50 + results_500
+        all_results.sort(key=lambda x: x["Score"], reverse=True)
+
+        if all_results:
+            print(f"✅ Found {len(all_results)} stocks. Sending top picks...")
+        else:
+            print("❌ No stocks found.")
+
+        asyncio.run(self.send_telegram(all_results))
+
+# ================= ENTRY POINT =================
+if __name__ == "__main__":
+    screener = NiftyIntradayScreener()
+    screener.run()    # ================= TELEGRAM SEND =================
     async def send_telegram(self, picks):
 
         if not picks:
