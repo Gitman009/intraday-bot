@@ -1,111 +1,185 @@
+import os
 import yfinance as yf
 import pandas as pd
-import numpy as np
-import time
-import requests   # ✅ Telegram ke liye
+import ta
+from datetime import datetime, timedelta
+import asyncio
+from telegram import Bot
+from telegram.error import TelegramError
+from niftystocks import ns
+import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pytz
 
-# -------------------------------
-# TELEGRAM SETTINGS 👇 YAHI TOKEN DALNA
-# -------------------------------
+warnings.filterwarnings('ignore')
 
-BOT_TOKEN = "7982592552:AAHebslaeHfca3dUpyPBX0_TLw_HwwGi5bk"
-CHAT_ID = "1039438785"
+# ================= TELEGRAM CONFIG =================
+TELEGRAM_TOKEN = os.getenv("7982592552:AAGC_eq8T1rNMzmRb7J1O7rsgvfH5UUWc3M")
+TELEGRAM_CHAT_ID = os.getenv("1039438785")
 
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-    requests.post(url, data=payload)
+IST = pytz.timezone('Asia/Kolkata')
 
-# -------------------------------
-# 90 STOCK LIST
-# -------------------------------
 
-stocks = [
-"RELIANCE.NS","HDFCBANK.NS","ICICIBANK.NS","INFY.NS","TCS.NS",
-"LT.NS","SBIN.NS","AXISBANK.NS","KOTAKBANK.NS","HINDUNILVR.NS",
-"ITC.NS","BAJFINANCE.NS","ASIANPAINT.NS","MARUTI.NS","SUNPHARMA.NS",
-"BHARTIARTL.NS","HCLTECH.NS","WIPRO.NS","ULTRACEMCO.NS","TITAN.NS",
+class NiftyIntradayScreener:
+    def __init__(self):
+        self.bot = Bot(token=TELEGRAM_TOKEN)
 
-"ADANIENT.NS","ADANIPORTS.NS","POWERGRID.NS","NTPC.NS","ONGC.NS",
-"COALINDIA.NS","TATASTEEL.NS","JSWSTEEL.NS","GRASIM.NS","DIVISLAB.NS",
-"EICHERMOT.NS","BAJAJFINSV.NS","TECHM.NS","DRREDDY.NS","HDFCLIFE.NS",
-"SBILIFE.NS","BPCL.NS","BRITANNIA.NS","CIPLA.NS","HEROMOTOCO.NS",
-"INDUSINDBK.NS","APOLLOHOSP.NS","TATAMOTORS.NS","PIDILITIND.NS","DABUR.NS",
-"AMBUJACEM.NS","GODREJCP.NS","M&M.NS","SIEMENS.NS","ICICIPRULI.NS",
+    # ================= STOCK LIST =================
+    def get_stock_lists(self):
+        print("📥 Fetching stock lists...")
+        nifty50 = ns.get_nifty50_with_ns()
+        nifty500 = ns.get_nifty500_with_ns()
+        print(f"✅ Nifty50: {len(nifty50)}")
+        print(f"✅ Nifty500: {len(nifty500)}")
+        return nifty50, nifty500
 
-"PEL.NS","ABB.NS","TORNTPHARM.NS","MPHASIS.NS","LUPIN.NS",
-"SAIL.NS","BANDHANBNK.NS","BANKBARODA.NS","CANBK.NS","INDIGO.NS",
-"IRCTC.NS","HAVELLS.NS","BALKRISIND.NS","ASTRAL.NS","PAGEIND.NS",
-"POLYCAB.NS","JUBLFOOD.NS","COLPAL.NS","VEDL.NS","NMDC.NS",
-"SRF.NS","TATAPOWER.NS","ADANIGREEN.NS","ADANITRANS.NS","ADANIPOWER.NS",
-"ICICIGI.NS","GLENMARK.NS","MOTHERSON.NS","ESCORTS.NS","RECLTD.NS",
-"PFC.NS","LICHSGFIN.NS","IDEA.NS","ZEEL.NS","SUNTV.NS",
-"CONCOR.NS","TRENT.NS","ALKEM.NS","ACC.NS","OBEROIRLTY.NS"
-]
+    # ================= ANALYSIS =================
+    def analyze_stock(self, symbol):
+        try:
+            end = datetime.now()
+            start = end - timedelta(days=7)
 
-# -------------------------------
-# TECHNICAL FUNCTIONS
-# -------------------------------
+            data_5m = yf.download(symbol, start=start, end=end, interval="5m", progress=False)
+            data_15m = yf.download(symbol, start=start, end=end, interval="15m", progress=False)
 
-def calculate_rsi(data, period=14):
-    delta = data["Close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+            if data_5m.empty or data_15m.empty:
+                return None
 
-def calculate_macd(data):
-    exp1 = data["Close"].ewm(span=12).mean()
-    exp2 = data["Close"].ewm(span=26).mean()
-    macd = exp1 - exp2
-    signal = macd.ewm(span=9).mean()
-    return macd, signal
+            # Indicators
+            data_5m['EMA_9'] = ta.trend.ema_indicator(data_5m['Close'], window=9)
+            data_5m['EMA_21'] = ta.trend.ema_indicator(data_5m['Close'], window=21)
+            data_5m['EMA_50'] = ta.trend.ema_indicator(data_5m['Close'], window=50)
+            data_5m['RSI'] = ta.momentum.rsi(data_5m['Close'], window=14)
 
-# -------------------------------
-# SCAN FUNCTION
-# -------------------------------
+            macd = ta.trend.MACD(data_5m['Close'])
+            data_5m['MACD'] = macd.macd()
+            data_5m['MACD_Signal'] = macd.macd_signal()
 
-results = []
+            data_5m['Volume_SMA'] = data_5m['Volume'].rolling(window=20).mean()
+            data_5m['Volume_Ratio'] = data_5m['Volume'] / data_5m['Volume_SMA']
 
-for stock in stocks:
-    try:
-        df = yf.download(stock, interval="5m", period="1d", progress=False)
-        
-        if len(df) < 30:
-            continue
+            # 15m confirmation
+            data_15m['EMA_9'] = ta.trend.ema_indicator(data_15m['Close'], window=9)
+            data_15m['EMA_21'] = ta.trend.ema_indicator(data_15m['Close'], window=21)
 
-        df["RSI"] = calculate_rsi(df)
-        df["MACD"], df["Signal"] = calculate_macd(df)
-        df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
+            latest = data_5m.iloc[-1]
+            prev = data_5m.iloc[-2]
+            latest_15m = data_15m.iloc[-1]
 
-        latest = df.iloc[-1]
+            score = 0
+            reasons = []
 
-        rsi_cond = latest["RSI"] > 55
-        macd_cond = latest["MACD"] > latest["Signal"]
-        vwap_cond = latest["Close"] > latest["VWAP"]
-        vol_cond = latest["Volume"] > df["Volume"].rolling(20).mean().iloc[-1]
-        breakout = latest["Close"] > df["High"].rolling(20).max().iloc[-2]
+            # Trend
+            if latest['Close'] > latest['EMA_9'] > latest['EMA_21'] > latest['EMA_50']:
+                score += 3
+                reasons.append("🔥 Strong Uptrend")
 
-        score = sum([rsi_cond, macd_cond, vwap_cond, vol_cond, breakout])
+            # RSI
+            if 55 < latest['RSI'] < 70:
+                score += 2
+                reasons.append(f"📊 RSI Momentum ({latest['RSI']:.1f})")
+            elif latest['RSI'] < 30 and latest['RSI'] > prev['RSI']:
+                score += 2
+                reasons.append(f"🔄 RSI Reversal ({latest['RSI']:.1f})")
 
-        results.append((stock, score, latest["Close"]))
+            # Volume
+            if latest['Volume_Ratio'] > 1.5:
+                score += 2
+                reasons.append(f"📈 Volume Spike ({latest['Volume_Ratio']:.1f}x)")
 
-    except:
-        pass
+            # MACD
+            if latest['MACD'] > latest['MACD_Signal']:
+                score += 1
+                reasons.append("💹 MACD Bullish")
 
-    time.sleep(0.3)
+            # 15m confirmation
+            if latest_15m['Close'] > latest_15m['EMA_9'] > latest_15m['EMA_21']:
+                score += 2
+                reasons.append("✅ 15-min Trend Up")
 
-# -------------------------------
-# TOP 4 STOCKS
-# -------------------------------
+            if score >= 5:
+                return {
+                    "Symbol": symbol.replace(".NS", ""),
+                    "Score": score,
+                    "Price": round(latest['Close'], 2),
+                    "RSI": round(latest['RSI'], 2),
+                    "Volume_Ratio": round(latest['Volume_Ratio'], 2),
+                    "Reasons": " | ".join(reasons[:3]),
+                    "Time": datetime.now(IST).strftime("%I:%M %p")
+                }
 
-results = sorted(results, key=lambda x: x[1], reverse=True)
+            return None
 
-print("\n🔥 BEST INTRADAY STOCKS TODAY:\n")
+        except:
+            return None
 
+    # ================= MULTI SCAN =================
+    def scan_stocks(self, symbols, workers=10):
+        results = []
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(self.analyze_stock, sym) for sym in symbols]
+
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    results.append(result)
+
+        results.sort(key=lambda x: x["Score"], reverse=True)
+        return results
+
+    # ================= TELEGRAM SEND =================
+    async def send_telegram(self, picks):
+
+        if not picks:
+            message = "❌ No strong intraday setup found."
+            await self.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+            return
+
+        header = f"🚀 TOP INTRADAY PICKS\n📅 {datetime.now(IST).strftime('%d %b %Y %I:%M %p IST')}\n\n"
+        body = ""
+
+        for i, stock in enumerate(picks[:4], 1):
+            body += (
+                f"{i}. {stock['Symbol']}\n"
+                f"Price: ₹{stock['Price']}\n"
+                f"RSI: {stock['RSI']} | Vol: {stock['Volume_Ratio']}x\n"
+                f"Signals: {stock['Reasons']}\n\n"
+            )
+
+        message = header + body + "⚠️ Educational Purpose Only"
+
+        try:
+            await self.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+            print("✅ Telegram message sent")
+        except TelegramError as e:
+            print("❌ Telegram Error:", e)
+
+    # ================= MAIN RUN =================
+    def run(self):
+
+        print("🚀 Running Intraday Scanner...")
+
+        nifty50, nifty500 = self.get_stock_lists()
+
+        results_50 = self.scan_stocks(nifty50[:20], workers=8)
+        results_500 = self.scan_stocks(nifty500[:100], workers=10)
+
+        all_results = results_50 + results_500
+        all_results.sort(key=lambda x: x["Score"], reverse=True)
+
+        asyncio.run(self.send_telegram(all_results))
+
+
+# ================= ENTRY POINT =================
+if __name__ == "__main__":
+
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("❌ TELEGRAM_TOKEN or TELEGRAM_CHAT_ID missing in GitHub Secrets")
+        exit()
+
+    screener = NiftyIntradayScreener()
+    screener.run()
 message = "🔥 BEST INTRADAY STOCKS TODAY:\n\n"
 
 for stock, score, price in results[:4]:
