@@ -14,7 +14,7 @@ import pytz
 warnings.filterwarnings('ignore')
 
 # ================= TELEGRAM CONFIG =================
-# GitHub Secrets se values lo
+# GitHub Secrets se values lo (name exactly match karo)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -107,7 +107,7 @@ class NiftyIntradayScreener:
                 score += 2
                 reasons.append("✅ 15-min Trend Up")
 
-            if score >= 5:
+            if score >= 5:  # Quality filter: sirf strong setups
                 return {
                     "Symbol": symbol.replace(".NS", ""),
                     "Score": score,
@@ -120,8 +120,7 @@ class NiftyIntradayScreener:
 
             return None
         except Exception as e:
-            # Optional: print error for debugging
-            # print(f"⚠️ Error analyzing {symbol}: {e}")
+            # Debug ke liye print kar sakte ho, par abhi silent rakho
             return None
 
     def scan_stocks(self, symbols, workers=10):
@@ -136,8 +135,9 @@ class NiftyIntradayScreener:
         return results
 
     async def send_telegram(self, picks):
+        """Har baar message bhejo, chahe picks empty ho ya nahi"""
         if not picks:
-            message = "🤖 **Intraday Scan**\n\n❌ No strong setups found today."
+            message = "🤖 **Intraday Scan**\n\n❌ Aaj koi strong stock setup nahi mila.\n⏰ Try again next scan!"
         else:
             header = f"🚀 **TOP {len(picks[:4])} INTRADAY PICKS**\n"
             header += f"📅 {datetime.now(IST).strftime('%d %b %Y, %I:%M %p IST')}\n\n"
@@ -158,11 +158,6 @@ class NiftyIntradayScreener:
             print(f"❌ Telegram error: {e}")
 
     def run(self):
-        # Market hours check optional hai, chahe to hata de
-        # if not is_market_open():
-        #     print("⏰ Market closed. Exiting.")
-        #     return
-
         print("🚀 Running Intraday Scanner...")
         nifty50, nifty500 = self.get_stock_lists()
 
@@ -173,10 +168,11 @@ class NiftyIntradayScreener:
         all_results = results_50 + results_500
         all_results.sort(key=lambda x: x["Score"], reverse=True)
 
-        if all_results:
-            print(f"✅ Found {len(all_results)} stocks. Sending top picks...")
+        # Console pe batana ki stock mile ya nahi
+        if not all_results:
+            print("❌ No stocks found with score >= 5. Still sending Telegram alert...")
         else:
-            print("❌ No stocks found.")
+            print(f"✅ Found {len(all_results)} stocks. Sending top picks...")
 
         asyncio.run(self.send_telegram(all_results))
 
