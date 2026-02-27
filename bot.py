@@ -107,7 +107,7 @@ class NiftyIntradayScreener:
                 score += 2
                 reasons.append("✅ 15-min Trend Up")
 
-            if score >= 5:  # Quality filter: sirf strong setups
+            if score >= 3:  # Quality filter: sirf strong setups
                 return {
                     "Symbol": symbol.replace(".NS", ""),
                     "Score": score,
