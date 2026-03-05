@@ -1,284 +1,175 @@
 import os
 import pandas as pd
-import ta
-from datetime import datetime, timedelta
+from datetime import datetime
 import asyncio
-import warnings
 import time
-import pytz
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# Telegram
-from telegram import Bot
-from telegram.error import TelegramError
-
-# Alpha Vantage
+import requests
 from alpha_vantage.timeseries import TimeSeries
 
-# Retry
-from tenacity import retry, stop_after_attempt, wait_exponential
+# -------------------- API KEYS (APNI DALO) --------------------
+ALPHA_VANTAGE_KEY = "R973R3LZRAUSA5W0"  # ✅ Tumhari Alpha Vantage key
 
-warnings.filterwarnings('ignore')
+# 🔴 Telegram Bot Token aur Chat ID (YEH APNI DALNI HOGE)
+TELEGRAM_TOKEN = "YOUR_BOT_TOKEN_HERE"  # @BotFather se lo
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"  # Apna chat ID dalo
 
-# -------------------- TELEGRAM & API CONFIG --------------------
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+# Do test stocks
+TEST_STOCKS = ['RELIANCE', 'TCS']  # Bina .NS ke, Alpha Vantage format
 
-if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    raise ValueError("❌ TELEGRAM_TOKEN and TELEGRAM_CHAT_ID must be set!")
-if not ALPHA_VANTAGE_KEY:
-    raise ValueError("❌ ALPHA_VANTAGE_API_KEY must be set in secrets!")
-
-IST = pytz.timezone('Asia/Kolkata')
-
-# -------------------- NIFTY STOCKS (with fallback) --------------------
-try:
-    from niftystocks import ns
-    print("✅ niftystocks loaded successfully")
-except ImportError:
-    print("⚠️ niftystocks not found, using hardcoded Nifty lists")
-    # Fallback hardcoded lists
-    class ns:
-        @staticmethod
-        def get_nifty50_with_ns():
-            return [
-                'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
-                'SBIN.NS', 'BHARTIARTL.NS', 'ITC.NS', 'KOTAKBANK.NS', 'LT.NS',
-                'WIPRO.NS', 'TECHM.NS', 'AXISBANK.NS', 'MARUTI.NS', 'SUNPHARMA.NS',
-                'TATAMOTORS.NS', 'TATASTEEL.NS', 'JSWSTEEL.NS', 'POWERGRID.NS', 'NTPC.NS'
-            ]
-        @staticmethod
-        def get_nifty500_with_ns():
-            # Extend with some more popular stocks
-            return ns.get_nifty50_with_ns() + [
-                'HINDALCO.NS', 'INDUSINDBK.NS', 'TITAN.NS', 'BAJFINANCE.NS', 'BAJAJFINSV.NS',
-                'ASIANPAINT.NS', 'HCLTECH.NS', 'DIVISLAB.NS', 'ULTRACEMCO.NS', 'GRASIM.NS',
-                'ADANIPORTS.NS', 'SHREECEM.NS', 'BPCL.NS', 'IOC.NS', 'HEROMOTOCO.NS',
-                'EICHERMOT.NS', 'COALINDIA.NS', 'BRITANNIA.NS', 'ONGC.NS', 'GAIL.NS'
-            ]
+# -------------------- TELEGRAM FUNCTION --------------------
+def send_telegram_message(message):
+    """Telegram par message bhejne ka function"""
+    if TELEGRAM_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("⚠️ Telegram token set nahi hai. Message bhejna skip kiya.")
+        return False
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message,
+        'parse_mode': 'Markdown'
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            print("✅ Telegram message sent")
+            return True
+        else:
+            print(f"❌ Telegram error: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Telegram exception: {e}")
+        return False
 
 # -------------------- ALPHA VANTAGE CLIENT --------------------
 class AlphaVantageClient:
     def __init__(self, api_key):
         self.ts = TimeSeries(key=api_key, output_format='pandas')
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def get_intraday(self, symbol, interval='5min'):
         """Fetch intraday data from Alpha Vantage"""
         try:
-            clean_symbol = symbol.replace('.NS', '')  # Alpha Vantage doesn't need .NS
-            data, meta = self.ts.get_intraday(symbol=clean_symbol, interval=interval, outputsize='compact')
+            print(f"📡 Fetching {symbol}...")
+            data, meta = self.ts.get_intraday(symbol=symbol, interval=interval, outputsize='compact')
             if data is not None and not data.empty:
                 data.columns = ['open', 'high', 'low', 'close', 'volume']
-                # Reverse to make latest last (like yfinance)
-                data = data.iloc[::-1]
+                data = data.iloc[::-1]  # Reverse to make latest last
+                print(f"✅ {symbol} data received: {len(data)} rows")
                 return data
             return None
         except Exception as e:
-            print(f"⚠️ Alpha Vantage error for {symbol}: {e}")
+            print(f"❌ Error for {symbol}: {e}")
             return None
 
-av_client = AlphaVantageClient(ALPHA_VANTAGE_KEY)
+# -------------------- SIMPLE ANALYSIS --------------------
+def analyze_stock(symbol, data):
+    """Basic analysis of stock data"""
+    try:
+        latest = data.iloc[-1]
+        prev = data.iloc[-2] if len(data) > 1 else latest
+        
+        # Calculate basic change
+        change = latest['close'] - prev['close']
+        change_percent = (change / prev['close']) * 100 if prev['close'] != 0 else 0
+        
+        result = {
+            'Symbol': symbol,
+            'Price': round(latest['close'], 2),
+            'Change': round(change, 2),
+            'Change%': round(change_percent, 2),
+            'Volume': int(latest['volume']),
+            'Time': datetime.now().strftime("%H:%M:%S")
+        }
+        return result
+    except Exception as e:
+        print(f"❌ Analysis error for {symbol}: {e}")
+        return None
 
-# -------------------- MAIN SCREENER CLASS --------------------
-class NiftyIntradayScreener:
-    def __init__(self):
-        self.bot = Bot(token=TELEGRAM_TOKEN)
-
-    def get_stock_lists(self):
-        print("📥 Fetching stock lists...")
-        nifty50 = ns.get_nifty50_with_ns()
-        nifty500 = ns.get_nifty500_with_ns()
-        print(f"✅ Nifty50: {len(nifty50)} stocks")
-        print(f"✅ Nifty500: {len(nifty500)} stocks")
-        return nifty50, nifty500
-
-    # -------------------- STEP 1: QUICK SCAN (5-min) --------------------
-    def quick_scan(self, symbol):
-        """10 stocks ka quick scan - sirf 5-min data se basic score"""
-        try:
-            data_5m = av_client.get_intraday(symbol, '5min')
-            if data_5m is None or data_5m.empty:
-                return None
-            
-            # Calculate indicators
-            data_5m['EMA_9'] = ta.trend.ema_indicator(data_5m['close'], window=9)
-            data_5m['EMA_21'] = ta.trend.ema_indicator(data_5m['close'], window=21)
-            data_5m['RSI'] = ta.momentum.rsi(data_5m['close'], window=14)
-            data_5m['Volume_SMA'] = data_5m['volume'].rolling(window=20).mean()
-            data_5m['Volume_Ratio'] = data_5m['volume'] / data_5m['Volume_SMA']
-            
-            latest = data_5m.iloc[-1]
-            score = 0
-            
-            # Criteria for quick scan
-            if latest['close'] > latest['EMA_9'] > latest['EMA_21']:
-                score += 2
-            if 55 < latest['RSI'] < 70:
-                score += 2
-            if latest['Volume_Ratio'] > 1.5:
-                score += 1
-            
-            if score >= 2:
-                return {
-                    "symbol": symbol,
-                    "score": score,
-                    "data_5m": data_5m
-                }
-            return None
-        except Exception as e:
-            print(f"⚠️ Quick scan error {symbol}: {e}")
-            return None
-
-    # -------------------- STEP 2: DEEP ANALYSIS (5-min + 15-min) --------------------
-    def deep_analyze(self, symbol, data_5m):
-        """Top 5 stocks ka 15-min data se deep analysis"""
-        try:
-            # Get 15-min data
-            data_15m = av_client.get_intraday(symbol, '15min')
-            if data_15m is None or data_15m.empty:
-                return None
-            
-            # Add 15-min EMAs
-            data_15m['EMA_9'] = ta.trend.ema_indicator(data_15m['close'], window=9)
-            data_15m['EMA_21'] = ta.trend.ema_indicator(data_15m['close'], window=21)
-            
-            # Add more indicators to 5-min data
-            data_5m['EMA_50'] = ta.trend.ema_indicator(data_5m['close'], window=50)
-            macd = ta.trend.MACD(data_5m['close'])
-            data_5m['MACD'] = macd.macd()
-            data_5m['MACD_Signal'] = macd.macd_signal()
-            
-            latest = data_5m.iloc[-1]
-            prev = data_5m.iloc[-2]
-            latest_15m = data_15m.iloc[-1]
-            
-            score = 0
-            reasons = []
-            
-            # 1. Strong trend (all EMAs aligned)
-            if latest['close'] > latest['EMA_9'] > latest['EMA_21'] > latest['EMA_50']:
-                score += 3
-                reasons.append("🔥 Strong Uptrend")
-            
-            # 2. RSI momentum or reversal
-            if 55 < latest['RSI'] < 70:
-                score += 2
-                reasons.append(f"📊 RSI Momentum ({latest['RSI']:.1f})")
-            elif latest['RSI'] < 30 and latest['RSI'] > prev['RSI']:
-                score += 2
-                reasons.append(f"🔄 RSI Reversal ({latest['RSI']:.1f})")
-            
-            # 3. Volume spike
-            if latest['Volume_Ratio'] > 1.5:
-                score += 2
-                reasons.append(f"📈 Volume Spike ({latest['Volume_Ratio']:.1f}x)")
-            
-            # 4. MACD bullish
-            if latest['MACD'] > latest['MACD_Signal']:
-                score += 1
-                reasons.append("💹 MACD Bullish")
-            
-            # 5. 15-min confirmation
-            if latest_15m['close'] > latest_15m['EMA_9'] > latest_15m['EMA_21']:
-                score += 2
-                reasons.append("✅ 15-min Trend Up")
-            
-            if score >= 4:
-                return {
-                    "Symbol": symbol.replace(".NS", ""),
-                    "Score": score,
-                    "Price": round(latest['close'], 2),
-                    "RSI": round(latest['RSI'], 2),
-                    "Volume_Ratio": round(latest['Volume_Ratio'], 2),
-                    "Reasons": " | ".join(reasons[:3]),
-                    "Time": datetime.now(IST).strftime("%I:%M %p")
-                }
-            return None
-        except Exception as e:
-            print(f"❌ Deep analysis error {symbol}: {e}")
-            return None
-
-    # -------------------- STEP 3: SEND TO TELEGRAM --------------------
-    async def send_telegram(self, picks):
-        """Send top picks to Telegram"""
-        if not picks:
-            message = "🤖 **Intraday Scan**\n\n❌ Aaj koi strong stock setup nahi mila.\n⏰ Try again next scan!"
+# -------------------- MAIN FUNCTION --------------------
+def main():
+    print("="*60)
+    print("🚀 TEST MODE: Sirf 2 Stocks Capture + Telegram")
+    print("="*60)
+    print(f"🔑 Alpha Vantage Key: {ALPHA_VANTAGE_KEY[:5]}...{ALPHA_VANTAGE_KEY[-5:]}")
+    print(f"🤖 Telegram Token: {'✅ Set' if TELEGRAM_TOKEN != 'YOUR_BOT_TOKEN_HERE' else '❌ Not Set'}")
+    print(f"📊 Testing Stocks: {TEST_STOCKS}")
+    print("-"*60)
+    
+    # Create client
+    client = AlphaVantageClient(ALPHA_VANTAGE_KEY)
+    
+    results = []
+    
+    for i, stock in enumerate(TEST_STOCKS):
+        print(f"\n🔍 Testing {i+1}/{len(TEST_STOCKS)}: {stock}")
+        
+        # Get data
+        data = client.get_intraday(stock, '5min')
+        
+        if data is not None:
+            # Analyze
+            analysis = analyze_stock(stock, data)
+            if analysis:
+                results.append(analysis)
+                print(f"✅ Analysis complete for {stock}")
+            else:
+                print(f"❌ Analysis failed for {stock}")
         else:
-            header = f"🚀 **TOP {len(picks)} INTRADAY PICKS**\n"
-            header += f"📅 {datetime.now(IST).strftime('%d %b %Y, %I:%M %p IST')}\n\n"
-            body = ""
-            for i, stock in enumerate(picks, 1):
-                body += (
-                    f"**{i}. {stock['Symbol']}**\n"
-                    f"💰 Price: ₹{stock['Price']}\n"
-                    f"📊 RSI: {stock['RSI']} | Volume: {stock['Volume_Ratio']}x\n"
-                    f"🎯 Signals: {stock['Reasons']}\n\n"
-                )
-            message = header + body + "⚠️ *Educational purpose only*"
+            print(f"❌ No data for {stock}")
+        
+        # Rate limit avoid karne ke liye (12 sec wait free API ke liye)
+        if i < len(TEST_STOCKS) - 1:
+            print("⏳ Waiting 12 seconds before next API call...")
+            time.sleep(12)
+    
+    # Print results to console
+    print("\n" + "="*60)
+    print("📊 CONSOLE RESULTS")
+    print("="*60)
+    
+    if results:
+        for r in results:
+            arrow = "📈" if r['Change'] >= 0 else "📉"
+            print(f"""
+🔹 {r['Symbol']}:
+   Price: ₹{r['Price']} {arrow}
+   Change: ₹{r['Change']} ({r['Change%']}%)
+   Volume: {r['Volume']:,}
+   Time: {r['Time']}
+""")
+        
+        print(f"\n✅ Successfully captured {len(results)}/{len(TEST_STOCKS)} stocks")
+        
+        # -------------------- TELEGRAM MESSAGE --------------------
+        print("\n" + "-"*60)
+        print("📱 Sending to Telegram...")
+        
+        # Telegram message banate hain
+        header = f"🚀 *Stock Update* - {datetime.now().strftime('%d %b %Y, %I:%M %p')}\n\n"
+        body = ""
+        
+        for r in results:
+            arrow = "📈" if r['Change'] >= 0 else "📉"
+            body += (
+                f"*{r['Symbol']}*\n"
+                f"💰 Price: ₹{r['Price']} {arrow}\n"
+                f"📊 Change: ₹{r['Change']} ({r['Change%']}%)\n"
+                f"📈 Volume: {r['Volume']:,}\n\n"
+            )
+        
+        footer = "⚡ *Powered by Alpha Vantage*\n#StockUpdate #TestMode"
+        
+        full_message = header + body + footer
+        
+        # Send to Telegram
+        send_telegram_message(full_message)
+        
+    else:
+        print("❌ Koi bhi stock capture nahi hua")
+        send_telegram_message("❌ *Stock Update Failed*\nKoi data capture nahi hua.")
+    
+    print("="*60)
 
-        try:
-            await self.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='Markdown')
-            print("✅ Telegram message sent")
-        except TelegramError as e:
-            print(f"❌ Telegram error: {e}")
-
-    # -------------------- MAIN RUN --------------------
-    def run(self):
-        print("="*60)
-        print("🚀 3-STEP INTRADAY SCREENER (Alpha Vantage)")
-        print("="*60)
-        
-        # Get stock lists
-        nifty50, nifty500 = self.get_stock_lists()
-        
-        # Step 1: Quick scan 10 stocks (5 Nifty50 + 5 Nifty500)
-        symbols_to_scan = nifty50[:5] + nifty500[:5]
-        print(f"\n🔰 STEP 1: Quick scanning {len(symbols_to_scan)} stocks with 5-min data...")
-        
-        quick_results = []
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(self.quick_scan, sym) for sym in symbols_to_scan]
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    quick_results.append(result)
-                time.sleep(1)  # Avoid hitting rate limit too hard
-        
-        if not quick_results:
-            print("❌ No stocks found in quick scan.")
-            asyncio.run(self.send_telegram([]))
-            return
-        
-        # Sort by score and take top 5
-        quick_results.sort(key=lambda x: x['score'], reverse=True)
-        top_5 = quick_results[:5]
-        print(f"\n🔰 STEP 2: Deep analyzing top {len(top_5)} stocks with 15-min data...")
-        
-        final_results = []
-        for item in top_5:
-            result = self.deep_analyze(item['symbol'], item['data_5m'])
-            if result:
-                final_results.append(result)
-            time.sleep(12)  # Alpha Vantage rate limit (5 calls per minute)
-        
-        # Sort and take top 4
-        final_results.sort(key=lambda x: x['Score'], reverse=True)
-        top_4 = final_results[:4]
-        
-        print(f"\n🔰 STEP 3: Sending top {len(top_4)} picks to Telegram...")
-        asyncio.run(self.send_telegram(top_4))
-        
-        # Summary
-        print("\n" + "="*60)
-        print(f"✅ Scan complete!")
-        print(f"📊 Quick scan qualified: {len(quick_results)} stocks")
-        print(f"🎯 Deep analysis selected: {len(final_results)} stocks")
-        print(f"📨 Sent: {len(top_4)} picks to Telegram")
-        print("="*60)
-
-# -------------------- ENTRY POINT --------------------
 if __name__ == "__main__":
-    screener = NiftyIntradayScreener()
-    screener.run()
+    main()
